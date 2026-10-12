@@ -7,6 +7,7 @@ Does not write ``.bob/mcp.json`` or launch Bob.
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -33,8 +34,8 @@ def force_interactive() -> None:
             os.environ.pop(env_var, None)
 
 
-def write_skore() -> None:
-    """Save ``.skore`` when this repo does not already have one."""
+def write_skore(*, switch_workspace: bool = False) -> None:
+    """Create ``.skore`` or switch to another workspace on request."""
     import click
     from skore_cli._hub_auth import ensure_login
     from skore_cli._skore import auth as _auth
@@ -48,7 +49,8 @@ def write_skore() -> None:
 
     config = SkoreConfig.load(REPO_ROOT)
     if (
-        config is not None
+        not switch_workspace
+        and config is not None
         and config.api_key
         and config.workspace
         and config.hub_url.rstrip("/") == HUB_URL
@@ -66,7 +68,7 @@ def write_skore() -> None:
                 "workspace on https://skore.probabl.ai named like your "
                 "Kaggle team, invites the others, then you re-run this script."
             )
-        saved_workspace = config.workspace if config else None
+        saved_workspace = None if switch_workspace else (config.workspace if config else None)
         membership = _resolve_membership(memberships, saved_workspace)
         api_key = _create_workspace_api_key(
             hub_url, token, user_id, membership, HARNESS
@@ -92,10 +94,17 @@ def write_skore() -> None:
 
 def main() -> None:
     """Write ``.skore`` using the skore-cli installed in this interpreter."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--switch-workspace",
+        action="store_true",
+        help="Choose a Hub workspace and refresh the local .skore credentials.",
+    )
+    args = parser.parse_args()
     os.environ["SKORE_HUB_URI"] = HUB_URL
     try:
         force_interactive()
-        write_skore()
+        write_skore(switch_workspace=args.switch_workspace)
     except ImportError:
         raise SystemExit(
             "skore-cli is not installed in this interpreter. "
