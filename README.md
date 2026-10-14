@@ -1,372 +1,399 @@
 <p align="center">
-  <img src="docs/figures/probabl-logo.svg" alt="Probabl" height="75">
+  <img src="docs/figures/probabl-logo.svg" alt="Probabl" height="72">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="docs/figures/ibm-logo.svg" alt="IBM" height="60">
+  <img src="docs/figures/ibm-logo.svg" alt="IBM" height="55">
 </p>
 
 <h1 align="center">Parkinson's True OFF Score Prediction</h1>
-<p align="center"><strong>ESILV × IBM × Probabl — Bobathon Hackathon 2026</strong></p>
+<p align="center"><strong>ESILV × IBM × Probabl · Bobathon 2026</strong></p>
 
 <p align="center">
-  <a href="https://www.kaggle.com/competitions/bobathon-esilv/">Kaggle competition</a> ·
-  <a href="https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/63086">Best Skore EstimatorReport</a> ·
+  <a href="https://www.kaggle.com/competitions/bobathon-esilv/">Kaggle challenge</a> ·
   <a href="journal/JOURNAL.md">Experiment journal</a> ·
-  <a href="docs/CONTEXT.md">Scientific context</a>
+  <a href="data/eda.md">Exploratory analysis</a> ·
+  <a href="docs/CONTEXT.md">Scientific background</a>
 </p>
 
-> **Best recorded result: 4.1896 RMSE** — five-fold **patient-grouped cross-validation** with tuned LightGBM (Experiment 09). This is a local validation score, **not** a Kaggle public/private leaderboard score.
+> **Best result recorded in this repository: 3.6341 RMSE** — Experiment 18, three-stage stacking with patient-level smoothing, evaluated using five patient-grouped folds. This is a **teammate-reported local CV result**, not a verified Kaggle score; the nested stacking evaluation still merits an independent leakage audit.
+>
+> **Latest model with a report URL explicitly documented in the original team's Skore workspace:** Experiment 09, **4.1896 grouped CV RMSE**, [EstimatorReport 63086](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/63086).
 
-## Overview
+## Project overview
 
-The objective is to predict a patient's **debiased true OFF motor score** for every Parkinson's disease visit. The challenge uses a **synthetic, longitudinal, multi-cohort** dataset designed to resemble clinical observations. The target is related to the MDS-UPDRS motor examination score, but observed ON/OFF scores can be distorted by medication state, time since levodopa intake, missing examinations, and differences between raters.
+The objective is to predict the **debiased (“true”) OFF MDS-UPDRS motor score** at each visit of a person with Parkinson's disease. Clinical ON/OFF measurements are imperfect proxies: medication effect, assessment timing, rater variability and missing examinations can obscure underlying motor severity.
 
-Instead of treating visits as unrelated rows, our solution builds a longitudinal representation of each patient from the **available input observations**, then uses medication-aware features and a regularized **LightGBM regressor** to estimate the underlying OFF score.
+We model visits **longitudinally** rather than as independent records. The project progresses from simple regression through patient-level feature aggregation and pharmacological correction to smoothing and cross-fitted stacked LightGBM models.
 
-This is an **academic machine-learning prototype**, not a validated clinical decision-support system.
+**Scope:** an academic experiment on a **synthetic dataset**, not a clinical device, diagnostic tool or validated real-patient outcome predictor.
 
-### At a glance
-
-| Item | Details |
+| Project fact | Value |
 | --- | --- |
-| Task | Supervised regression: predict `target` (true/debiased OFF motor score) |
-| Evaluation metric | Root mean squared error (RMSE; lower is better) |
-| Training data | **44,590 visits**, **5,576 patients** |
-| Hidden-label test inputs | **11,013 visits**, **1,395 different patients** |
-| Validation protocol | **5-fold `GroupKFold` by `patient_id`** |
-| Best model | Experiment **09 — tuned LightGBM** |
-| Best grouped CV | **4.1896 RMSE** (fold mean) |
-| Hub workspace / project | `philippeEtchebest` / `bobathon-esilv` |
-| Submission artifact | `submissions/09_tuned_lgbm.csv` (generated locally, not committed) |
+| Prediction target | `target` — synthetic debiased true OFF score |
+| Metric | Root mean squared error (RMSE; lower is better) |
+| Training set | 44,590 visits from 5,576 patients |
+| Test set | 11,013 visits from 1,395 **different** patients |
+| Main validation | Five-fold `GroupKFold(groups=patient_id)` |
+| Strongest reported experiment | `18_stack3` — 3.6341 RMSE |
+| Better-documented fallback | `09_tuned_lgbm` — 4.1896 RMSE, associated Skore URL recorded |
+| Kaggle leaderboard result | **Not documented in this repository** |
 
-## Contents
+### Contents
 
-- [Challenge and dataset](#challenge-and-dataset)
-- [Approach and feature engineering](#approach-and-feature-engineering)
-- [Experiments and results](#experiments-and-results)
-- [Validation and leakage prevention](#validation-and-leakage-prevention)
-- [Repository structure](#repository-structure)
-- [Setup and reproducibility](#setup-and-reproducibility)
-- [Kaggle submission](#kaggle-submission)
-- [Interpretation and limitations](#interpretation-and-limitations)
-- [Academic deliverables and references](#academic-deliverables-and-references)
+- [Data and evaluation](#data-and-evaluation)
+- [Modelling approach](#modelling-approach)
+- [Experimental results](#experimental-results)
+- [Skore reports and reproducibility status](#skore-reports-and-reproducibility-status)
+- [Repository layout](#repository-layout)
+- [Set up the project](#set-up-the-project)
+- [Run the experiments](#run-the-experiments)
+- [Prepare a Kaggle submission](#prepare-a-kaggle-submission)
+- [Known limitations and next steps](#known-limitations-and-next-steps)
+- [Team, credits and references](#team-credits-and-references)
 
-## Challenge and dataset
+## Data and evaluation
 
-Parkinson's motor symptoms are measured under changing medication conditions. An **ON** observation is taken while medication has an effect; an **OFF** observation is intended to better reflect untreated severity, but can be affected by incomplete medication washout, rater subjectivity, and missingness. The challenge asks us to estimate a *debiased true OFF* score from these imperfect measurements.
+The organizers provide synthetic multi-cohort Parkinson's visits, with irregular intervals and multiple observations per patient. The intended prediction is a *debiased OFF* motor score rather than a directly observed clinic measurement. See [the organizer's context document](docs/CONTEXT.md) for the synthetic-generative assumptions.
 
-The challenge data are **synthetic**. They do not contain a real-world ground-truth clinical estimate of neurodegeneration. See [`docs/CONTEXT.md`](docs/CONTEXT.md) for the scientific assumptions and synthetic data-generation description.
+| Input category | Columns |
+| --- | --- |
+| Identity and grouping | `Index`, `patient_id` |
+| Demographics and disease stage | `sexM`, `age`, `age_at_diagnosis` |
+| Cohort and genetics | `cohort`, `gene` |
+| Clinical measurements | `on`, `off` |
+| Medication and timing | `ledd`, `time_since_intake_on`, `time_since_intake_off` |
+| Examiner | `rater_id` |
+| Training label (absent from test inputs) | `target` |
 
-### Input columns
+The [EDA report](data/eda.md) documents missing values, patient histories and feature distributions. ON and OFF are not simultaneously absent from a visit, but either measurement can be missing. Missingness indicators and available patient history are therefore useful signals.
 
-| Category | Columns | Purpose |
-| --- | --- | --- |
-| Row / patient identifiers | `Index`, `patient_id` | Join/output key and patient grouping; not passed to the regressor as raw identifiers |
-| Demographics / history | `sexM`, `age`, `age_at_diagnosis` | Patient and disease-stage characteristics |
-| Cohort / genetics | `cohort`, `gene` | Contextual and categorical information |
-| Medication | `ledd`, `time_since_intake_on`, `time_since_intake_off` | Treatment exposure and measurement timing |
-| Observed measurements | `on`, `off` | Biased/noisy motor-score observations |
-| Assessment context | `rater_id` | Clinician/rater category |
-| Label (training only) | `target` | Debiased true OFF score to predict |
+### Why the validation split matters
 
-A single patient can have several visits. The training and Kaggle test populations have **no patient overlap**, so a random visit-level split would produce misleadingly optimistic evaluation.
+Kaggle tests on **entirely unseen patients**. A random row-level train/test split would leak patient identity through correlated visits, making the evaluation overly optimistic. Experiments therefore use a five-fold **patient-grouped** split; each patient's visits are assigned to exactly one held-out fold.
 
-Missingness is important: in the recorded EDA, approximately **42.4%** of visits lack an OFF measurement, **29.6%** lack ON, and **78.8%** lack `time_since_intake_off`. ON and OFF are never both missing in the same visit. The pipeline retains missing-value information instead of blindly replacing all missing scores with a global average.
+```python
+from sklearn.model_selection import GroupKFold
 
-Detailed exploration: [`data/eda.md`](data/eda.md) · [training profile](data/eda_train.html) · [test profile](data/eda_test.html).
+splits = list(
+    GroupKFold(n_splits=5).split(X, y, groups=patient_ids)
+)
+```
 
-## Approach and feature engineering
+For each held-out patient, input-only aggregates may use that patient's **available unlabeled observations**, just as the competition test set provides multiple feature rows per unseen patient. **No held-out target values may be used** when constructing features, fitting medication corrections, or training stacking stages.
 
-Our final recorded approach consists of three ordered stages:
+Metric:
+
+\[
+\operatorname{RMSE}=\sqrt{\frac{1}{n}\sum_{i=1}^{n}(y_i-\hat{y}_i)^2}
+\]
+
+All model scores in this README are transcribed from the committed experiment journal or scripts. They are **not a claim of independently reproduced results**.
+
+## Modelling approach
 
 ```text
-Input visits
-     |
-     v
-LongitudinalAggregator
-  - within-patient ON/OFF/LEDD statistics
-  - age-based progression slopes and intercepts
-  - first/last observation, visit count and age span
-     |
-     v
-MedicationFeatureAdder
-  - predicted ON/OFF from each patient's observed trend
-  - current-visit deviations from those trends
-  - ON/OFF gap, dose and intake-time interactions
-     |
-     v
-Tuned LightGBMRegressor
-     |
-     v
+Raw visits
+   |
+   +--> Visit-level features: diagnosis duration, medication, missingness
+   |
+   +--> Patient trajectories: ON/OFF statistics, slopes, age position
+   |
+   +--> Quadratic trajectories and rater-bias features
+   |
+   +--> Medication-aware Bateman corrections (trained within the appropriate folds)
+   |
+   v
+LightGBM severity predictions
+   |
+   +--> Patient-level quadratic smoothing of predictions
+   |
+   +--> Stage-2 stacking using cross-fitted stage-1 predictions
+   |
+   +--> Stage-3 stacking using prediction-curve features (Exp 18)
+   |
+   v
 Predicted debiased true OFF score
 ```
 
-### 1. Basic visit-level features
+### Baselines and longitudinal features (Experiments 01–09)
 
-- **Disease duration:** `age - age_at_diagnosis`.
-- **Observed ON/OFF difference:** `off - on`, when both are available.
-- **Explicit missingness indicators** for ON, OFF and LEDD.
-- Raw numeric columns with native missing-value handling in LightGBM.
-- `cohort`, `gene` and `rater_id` as pandas categorical columns.
+We began with mean regression, Ridge, HistGradientBoosting and LightGBM. The largest early improvement came from representing a patient's history:
 
-### 2. Longitudinal patient representation (Experiment 07)
+- Longitudinal ON/OFF means, medians, dispersion, extrema and valid-observation counts.
+- First/last readings, age span, visit count and relative position within the observed trajectory.
+- Linear ON/OFF slopes and fitted levels at the visit's age.
+- Deviations of current ON/OFF readings from the fitted patient trends.
+- Medication dose and intake-time interactions, categorical cohort/gene/rater variables, and missingness indicators.
 
-We estimate context from each patient's **input measurements**, including:
+Experiment 09 selected a more strongly regularized LightGBM configuration after a two-fold pilot and full five-fold comparison: 2,000 estimators, learning rate 0.03, 63 leaves, column subsampling 0.7, `reg_alpha=0.5` and `reg_lambda=3.0`. It reached **4.1896 grouped CV RMSE**.
 
-- ON/OFF mean, median, standard deviation, minimum and maximum.
-- First and last observed ON/OFF measurement in age order.
-- ON/OFF linear progression slope and intercept versus age, when estimable.
-- Counts of valid ON/OFF readings, missing fractions, and LEDD summary statistics.
-- Minimum and maximum observed age, patient age span, total visit count, and current visit's relative position in that span.
+### Quadratic features, rater effects and medication corrections (Experiments 10–14)
 
-The patient-level transformer computes statistics from the **feature rows being transformed**. For a held-out patient, it uses that patient's available unlabelled visits; it never looks up that patient's `target`. When a patient has too little data to estimate a statistic, the implementation uses missing values and/or fallbacks derived from the training partition.
+- **10 — Quadratic features:** estimates patient-specific curvature of ON/OFF measurements versus age, as well as quadratic predictions and visit-level residuals.
+- **11 — Rater bias:** introduces rater-related bias features estimated using labelled training observations, with shrinkage. Fitting the correction on the correct training fold is essential.
+- **12 — Bateman:** models an approximate medication response using a Bateman absorption/elimination curve and an OFF-decay correction; these learned parameters inform corrected ON/OFF features.
+- **13 — Intervisit/LEDD experiment:** explored multiple modifications and performed worse in the journal. **The committed script currently has an incorrect duplicate report key**; do not publish it unchanged.
+- **14 — Intervisit features:** adds within-patient consecutive-visit changes and velocities.
 
-### 3. Medication and observation-bias features (Experiment 08)
+These corrections are modelling assumptions and engineered predictors, **not validated pharmacodynamic estimates**.
 
-These features capture the difference between a noisy current measurement and the patient's broader observed trajectory:
+### Patient smoothing and stacking (Experiments 15–18)
 
-- Trend-predicted ON and OFF score at the current age.
-- `on_dev_from_trend` and `off_dev_from_trend`.
-- Observed ON/OFF gap and patient-mean gap.
-- LEDD × ON/OFF gap interaction and ON/OFF ratio.
-- Time-since-intake × observed-score interactions.
+**15 — Quadratic smoothing** fits an age-based curve to each patient's *predicted scores*, not to their target labels, reducing visit-level fluctuation. The recorded five-fold RMSE is **4.0256**.
 
-They are **data-driven features**, not a complete pharmacokinetic or causal medication model. Their individual contributions require controlled ablation to establish.
+**16 — Weighted/ridge smoothing** adjusts the smoothing weights and penalizes curvature; **4.0216** was the best recorded number, but the journal notes that the marginal improvement may not justify additional complexity.
 
-### 4. Tuned LightGBM (Experiment 09)
+**17 — Two-stage stacking** feeds patient-level curve features derived from cross-fitted stage-1 predictions into another LightGBM model, then smooths the output. It reports **3.7652** grouped CV RMSE.
 
-Experiment 09 evaluated several candidate configurations in a two-fold pilot and compared shortlisted configurations using all five patient-grouped folds. The selected `strong_reg` configuration uses:
+**18 — Three-stage stacking** adds a third predictor that uses first- and second-stage prediction-curve features, followed by smoothing. It reports **3.6341** grouped CV RMSE (five folds). The script is computationally expensive and the construction of *nested* out-of-fold features needs additional review before this result should be treated as leakage-free.
 
-| Parameter | Value |
-| --- | ---: |
-| `n_estimators` | 2,000 |
-| `learning_rate` | 0.03 |
-| `num_leaves` | 63 |
-| `min_child_samples` | 20 |
-| `subsample` / `subsample_freq` | 0.8 / 1 |
-| `colsample_bytree` | 0.7 |
-| `reg_alpha` / `reg_lambda` | 0.5 / 3.0 |
-| `random_state` | 42 |
+## Experimental results
 
-For the full candidate definitions, evaluation, final refit and CSV generation, see [`experiments/09_tuned_lgbm.py`](experiments/09_tuned_lgbm.py).
+The following figures are **recorded mean five-fold RMSE values**, except where the journal explicitly notes an abandoned or pending run. Lower is better.
 
-## Experiments and results
+| # | Experiment / source | Main idea | Recorded RMSE |
+| :-- | --- | --- | --: |
+| 01 | [Dummy](experiments/01_dummy.py) | Mean baseline | 16.499 |
+| 02 | [Ridge](experiments/02_ridge.py) | Linear regression with preprocessing | 10.446 |
+| 03 | [HistGB](experiments/03_histgb.py) | Nonlinear regression | 7.484 |
+| 04 | [Patient features](experiments/04_patient_features.py) | Patient aggregates | 5.346 |
+| 05 | [LightGBM](experiments/05_lightgbm.py) | LightGBM with patient features | 5.293 |
+| 06 | CatBoost | Computational cost | Abandoned |
+| 07 | [Longitudinal](experiments/07_longitudinal.py) | Trajectory features | 4.3474 |
+| 08 | [Medication](experiments/08_medication.py) | Trend deviations / timing interactions | 4.2101 |
+| 09 | [Tuned LightGBM](experiments/09_tuned_lgbm.py) | Regularization tuning | 4.1896 |
+| 10 | [Quadratic features](experiments/10_quadratic_features.py) | Curvature and fitted trajectories | 4.1714 |
+| 11 | [Rater bias](experiments/11_rater_bias.py) | Rater correction features | 4.1644 |
+| 12 | [Bateman](experiments/12_bateman.py) | Medication correction | 4.1310 |
+| 13 | [Intervisit + LEDD](experiments/13_interviz_ledd.py) | Combined feature changes; worse | 4.221 |
+| 14 | [Intervisit simple](experiments/14_interviz_simple.py) | Visit-to-visit differences | 4.095 |
+| 15 | [Patient smoothing](experiments/15_patient_smoothing.py) | Quadratic smoothing of predictions | 4.0256 |
+| 16 | [Smooth ridge](experiments/16_smooth_ridge.py) | Weighted, regularized smoothing | 4.0216 |
+| 17 | [Two-stage stacking](experiments/17_stack_smooth.py) | Cross-fitted prediction curves | **3.7652** |
+| **18** | **[Three-stage stacking](experiments/18_stack3.py)** | **Third stacked prediction stage** | **3.6341 (reported)** |
 
-All values below are **recorded local validation results**, not Kaggle leaderboard scores.
+Experiment 19 (seed bagging) is described as *planned* in the journal, but **`experiments/19_seed_bagging.py` is not committed**; it is not a reproducible experiment in this repository.
 
-| Experiment | Main change | Grouped CV RMSE | Outcome |
-| --- | --- | ---: | --- |
-| [01 — Dummy](experiments/01_dummy.py) | Mean prediction baseline | 16.499 | Reference |
-| [02 — Ridge](experiments/02_ridge.py) | Numerical/categorical preprocessing and linear regression | 10.446 | Improvement |
-| [03 — HistGradientBoosting](experiments/03_histgb.py) | Nonlinear model with native numeric missingness | 7.484 | Improvement |
-| [04 — Patient features](experiments/04_patient_features.py) | Basic patient-level aggregates | 5.346 | Improvement |
-| [05 — LightGBM](experiments/05_lightgbm.py) | LightGBM with patient features | 5.293 | Improvement |
-| 06 — CatBoost | Incomplete experiment; computationally expensive | — | Abandoned |
-| [07 — Longitudinal](experiments/07_longitudinal.py) | Patient trajectories and richer aggregates | **4.3474** | Improvement |
-| [08 — Medication](experiments/08_medication.py) | Trend deviations and medication features | **4.2101** | Improvement |
-| **[09 — Tuned LightGBM](experiments/09_tuned_lgbm.py)** | Stronger regularization and tuned boosting | **4.1896** | **Best recorded** |
+### Fold-level evidence for the most recent models
 
-The reported reduction from Experiment 05 (5.2925) to Experiment 09 (4.1896) is approximately **20.8% in RMSE**.
+| Fold | Exp 09 | Exp 17 | Exp 18 |
+| :-- | --: | --: | --: |
+| 1 | 4.1865 | 3.7713 | 3.6656 |
+| 2 | 4.2756 | 3.8145 | 3.6458 |
+| 3 | 4.1527 | 3.7281 | 3.6238 |
+| 4 | 4.1274 | 3.7183 | 3.5969 |
+| 5 | 4.2055 | 3.7937 | 3.6386 |
+| **Mean** | **4.1896** | **3.7652** | **3.6341** |
 
-### Experiment 09: per-fold results
+The journal reports an **approximately 78% reduction in RMSE relative to the dummy baseline** from Experiment 01 to Experiment 18. The relative improvement is descriptive of the recorded validation scores, not proof of a similar improvement on Kaggle.
 
-| Fold | RMSE |
-| --- | ---: |
-| 1 | 4.1865 |
-| 2 | 4.2756 |
-| 3 | 4.1527 |
-| 4 | 4.1274 |
-| 5 | 4.2055 |
-| **Mean** | **4.1896** |
-| **Reported standard deviation** | **0.057** |
+## Skore reports and reproducibility status
 
-### Published Skore reports
+The project publishes reports using:
 
-| Experiment | EstimatorReport |
-| --- | --- |
-| 07 — Longitudinal | [Hub report 62869](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/62869) |
-| 08 — Medication | [Hub report 62868](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/62868) |
-| **09 — Tuned LightGBM** | **[Hub report 63086](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/63086)** |
+```python
+cfg = json.loads((PROJECT_ROOT / ".skore").read_text())
+project = Project(
+    name="bobathon-esilv",
+    mode="hub",
+    workspace=cfg["workspace"],
+)
+project.put(REPORT_KEY, estimator_report)
+```
 
-These published estimator reports describe **held-out fold models**; each submission script separately refits a model on all training visits before predicting the Kaggle test set. The correspondence between a held-out report and the full-data refit should be accepted by the competition organizers before submission.
+**A report URL is not interchangeable between experiments.** Every competition CSV requires an associated **Skore Hub EstimatorReport** and a new, matching report key.
 
-Further modelling decisions, investigations and the invalid in-sample trend diagnostic are documented in [`journal/JOURNAL.md`](journal/JOURNAL.md).
+### Report URLs recorded in the journal
 
-## Validation and leakage prevention
+| Experiment | Recorded report URL | Verification note |
+| --- | --- | --- |
+| 07 | [62869](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/62869) | Original workspace link |
+| 08 | [62868](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/62868) | Original workspace link |
+| 09 | [63086](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/63086) | Original workspace link |
+| 10 | [69664](https://skore.probabl.ai/philippeechebest/bobathon-esilv/estimators/69664) | **Different workspace spelling in the journal; verify** |
+| 11 | [69801](https://skore.probabl.ai/philippeechebest/bobathon-esilv/estimators/69801) | **Different workspace spelling in the journal; verify** |
+| 12 | [70011](https://skore.probabl.ai/philippeechebest/bobathon-esilv/estimators/70011) | **Different workspace spelling in the journal; verify** |
+| 13–18 | No verified URL in the committed journal | **Do not invent a URL; obtain it from the actual Skore project** |
 
-The Kaggle test set contains entirely **unseen patients**, not just unseen rows. We therefore use five-fold `GroupKFold` with `patient_id` as the grouping key:
+The journal alternates between `philippeEtchebest` and `philippeechebest`. They are **not the same literal workspace name**. Verify your Kaggle team name, actual Skore workspace and permissions before using any report link for competition eligibility.
 
-1. Each patient belongs to exactly one validation fold.
-2. No patient's visits appear in both training and validation partitions of that fold.
-3. The same split construction is used across Experiments 05–09 for comparable scores.
-4. Patient-level features are generated from **input columns only**, including other available unlabelled visits for a held-out patient; no target-based group aggregation is performed.
-5. `Index` is used only for merges and output alignment, and raw `patient_id` is used for grouping/feature creation rather than direct memorization by LightGBM.
-6. The final prediction CSV is aligned with the provided submission template and validated for duplicate indices, missing or nonfinite predictions.
+Publishing code exists for the later experiments; **the presence of `project.put(...)` in a script does not establish that publication succeeded**. A final submission CSV is also not available through GitHub because the `submissions/` directory is ignored.
 
-**Important distinction:** the exploratory `1.61 RMSE` patient trend diagnostic described in the journal was *in-sample* (the patient's own target values were used to fit and score the same trend). It is **not an eligible generalization estimate** and is excluded from comparisons.
-
-The reported model-selection CV is useful evidence, but repeated experimental choices on the same folds can introduce some optimism. An independent Kaggle score has not been established in this README.
-
-## Repository structure
+## Repository layout
 
 ```text
 .
-├── .bob/rules/AGENTS.md           # Mandatory Bob setup gate
+├── .bob/rules/AGENTS.md          # Mandatory Bob setup checks
 ├── data/
-│   ├── X_train.csv                # Training input visits
-│   ├── y_train.csv                # Training targets
-│   ├── X_test.csv                 # Unlabelled test visits
-│   ├── sample_submission.csv      # Required Index,target template
-│   ├── eda.py / eda.md            # Reproducible exploratory analysis
-│   └── eda_train.html / eda_test.html
+│   ├── X_train.csv, y_train.csv   # Labelled training data
+│   ├── X_test.csv                 # Unlabelled challenge inputs
+│   ├── sample_submission.csv      # Index,target template
+│   ├── eda.py, eda.md             # Exploratory analysis
+│   └── eda_train.html, eda_test.html
 ├── docs/
-│   ├── SETUP.md                   # Official setup steps
-│   ├── DAY1.md / DAY2.md          # Organizer lab guides
-│   ├── CONTEXT.md                 # Scientific / synthetic-data context
-│   └── figures/
+│   ├── CONTEXT.md                # Challenge scientific context
+│   ├── SETUP.md                  # Official Bob and Skore setup
+│   └── DAY1.md, DAY2.md          # Organizer exercises
 ├── experiments/
+│   ├── 00_diagnostic.py
 │   ├── 01_dummy.py ... 05_lightgbm.py
-│   ├── 07_longitudinal.py
-│   ├── 08_medication.py
-│   └── 09_tuned_lgbm.py           # Best recorded candidate
-├── journal/JOURNAL.md             # Experiment history and decisions
-├── scripts/skore-agent            # Configure Skore Hub credentials locally
-├── tests/test_setup.py            # Seven setup checks
-├── requirements.txt
+│   ├── 07_longitudinal.py ... 11_rater_bias.py
+│   ├── 12_bateman.py
+│   ├── 12_bateman_finalize.py
+│   └── 13_interviz_ledd.py ... 18_stack3.py
+├── journal/JOURNAL.md            # Results, findings and limitations
+├── scripts/skore-agent           # Local workspace authentication
+├── tests/test_setup.py           # Environment / Hub setup checks
+├── requirements.txt              # Organizer setup dependencies
 └── README.md
 ```
 
-The `submissions/` and `scratch/` directories are excluded from Git by design. Submission CSVs are **generated artifacts**, so the expected Kaggle CSV may exist on a teammate's machine without appearing on GitHub. Keep a separate local backup of the best CSV.
+**Not committed:** `.skore` (secret API credentials), `.venv/`, Bob skill installations, `scratch/` and `submissions/`. These paths are intentionally gitignored. The repository is currently **private**; do not share the challenge data or credentials without organizer approval.
 
-## Setup and reproducibility
+## Set up the project
 
-> **Eligibility:** Official hackathon code must be written and run through **IBM Bob (IDE or CLI)**, following the organizer's lab-skill requirements, and model evaluations/reports must use **skore**. Consult [`docs/SETUP.md`](docs/SETUP.md) and the [competition rules](https://www.kaggle.com/competitions/bobathon-esilv/rules) for the authoritative conditions.
+> **Competition workflow:** IBM Bob is the required coding agent, and model evaluation/reporting uses **skore**. Follow the organizer's [setup guide](docs/SETUP.md) and [Kaggle rules](https://www.kaggle.com/competitions/bobathon-esilv/rules). Documenting an experiment here is **not** a substitute for satisfying those rules.
 
 ### Prerequisites
 
-- Access to this private repository and the competition data.
-- Python **3.12 or newer**.
-- IBM Bob, with the lab skills installed and **Skill** permission enabled.
-- Access to the correct team workspace at [Skore Hub](https://skore.probabl.ai).
+- Git and Python **3.12+**.
+- Access to this private repository and the hackathon data.
+- **IBM Bob IDE or CLI**, with the organizer's skills installed and **Skill** permission enabled.
+- A single Skore workspace shared by the Kaggle team, with the correct workspace name.
 
-### Windows / PowerShell
-
-From a terminal in IBM Bob, using a Python 3.12+ interpreter:
+### Windows PowerShell (inside your IBM Bob project)
 
 ```powershell
 git clone https://github.com/cyrilibr/esilv-parkinsons-hackathon.git
 cd esilv-parkinsons-hackathon
 
+python --version
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m pip install numpy pandas scikit-learn lightgbm
+
+# If activation is blocked, consult docs/SETUP.md for PowerShell policy instructions.
+.\.venv\Scripts\Activate.ps1
+
+python -m pip install -r requirements.txt
+python -m pip install numpy pandas scipy scikit-learn lightgbm
+
+skore skills install all --repo probabl-ai/skills-hackathon --agent bob
+python scripts/skore-agent
+python -m pytest tests/test_setup.py
 ```
 
-**Dependency reproducibility note:** `requirements.txt` currently pins the organizer setup tool (`skore-cli==0.4.1`) and includes `pytest`, but it does **not yet pin** the data-science package versions used for the published LightGBM result. The extra installation command provides the missing direct dependencies; for bit-for-bit reproducibility, record and pin the versions from the tested environment before archiving the final submission.
+The tracked `requirements.txt` lists `skore-cli==0.4.1` and `pytest` only. The experiment scripts also directly import NumPy, pandas, SciPy, scikit-learn and LightGBM; **their exact tested versions are not pinned**. The additional install command is a convenience, not a version-locked replication of the original environment. For a scientific archive, capture compatible versions from the environment actually used.
 
-Follow [`docs/SETUP.md`](docs/SETUP.md) to install the Bob lab skills and log in. To create the local `.skore` configuration:
+Already cloned the repository? From the project directory, use `git pull --ff-only origin main` after checking that local modifications are safely stored.
+
+### Verify your own Skore workspace safely
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/skore-agent
+python -c "import json; print('Skore workspace:', json.load(open('.skore'))['workspace'])"
+python -c "import numpy,pandas,scipy,sklearn,lightgbm,skore; print('Imports OK')"
+python -m pytest tests/test_setup.py
 ```
 
-If an existing `.skore` points to a different workspace, the repository's helper supports:
+To select the correct Hub workspace again, the local helper supports `python scripts/skore-agent --switch-workspace`. **Never print, send or commit the contents of `.skore`**; it includes credentials.
+
+## Run the experiments
+
+**Important:** these scripts are executable experiments, not a unified, lightweight test suite. Some run expensive model searches and five-fold cross-validation before reporting and final fit. Skore may also refit an estimator for its EstimatorReport.
+
+### Known reproducible command: Experiment 09
 
 ```powershell
-.\.venv\Scripts\python.exe scripts/skore-agent --switch-workspace
+python -u .\experiments\09_tuned_lgbm.py
 ```
 
-The local configuration contains **API credentials** and must never be committed, copied into the README or included in the final ZIP.
+This runs the pilot, grouped CV, publishes `09_tuned_lgbm` and creates `submissions/09_tuned_lgbm.csv`.
 
-Run the mandatory setup checks inside the configured IBM Bob workspace:
+### Run later experiments
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests/test_setup.py
+# Example of a complete (potentially long) three-stage stacking run:
+python -u .\experiments\18_stack3.py
 ```
 
-These tests require the actual Bob environment, its installed lab skills, the latest chat's permission settings, and a working Skore Hub connection; they are not ordinary offline model unit tests.
+**Do not use Experiment 18 as a quick “generate CSV” command.** Its committed script always reruns all five outer folds, creates an EstimatorReport, then trains a final full-data model. The journal records roughly **57 minutes for CV alone**, before report and final-model training. The nested evaluation also requires review for potential cross-fold information sharing.
 
-### Run the best experiment
+Experiment 17 has an explicit shortcut:
 
 ```powershell
-.\.venv\Scripts\python.exe -u .\experiments\09_tuned_lgbm.py
+$env:SKIP_CV = "1"
+python -u .\experiments\17_stack_smooth.py
+Remove-Item Env:SKIP_CV
 ```
 
-This script:
-1. Loads and aligns the training/test tables.
-2. Runs a **two-fold hyperparameter pilot**.
-3. Evaluates the two shortlisted configurations with **five-fold patient-grouped CV** through skore.
-4. Publishes a held-out fold-0 EstimatorReport to the workspace selected in local `.skore`.
-5. Refits the selected model on all labelled visits.
-6. Writes `submissions/09_tuned_lgbm.csv` in sample-submission order.
+That mode **reuses previously recorded outer-fold scores** rather than recomputing them. It still trains an EstimatorReport estimator and the full prediction model, so a valid report and CSV remain conditional on successful execution and publication.
 
-**Expected runtime:** potentially several minutes or longer; it retrains multiple models, not just a single LightGBM estimator. If you already have a validated CSV, a rerun is unnecessary merely to locate that file. Check the unique-report-key requirements before republishing or making another Kaggle submission.
+**Experiment 13 warning:** `experiments/13_interviz_ledd.py` currently sets `KEY = "14_interviz_simple"`, which conflicts with Experiment 14. Do **not** publish the existing Experiment 13 script until IBM Bob verifies its implementation and corrects the key.
 
-### Verify a generated CSV
+### Validate a generated submission CSV
+
+Replace the filename with the **actual** CSV that was generated on your machine:
 
 ```powershell
-.\.venv\Scripts\python.exe -c "import pandas as pd, numpy as np; s=pd.read_csv('submissions/09_tuned_lgbm.csv'); t=pd.read_csv('data/sample_submission.csv'); assert s.columns.tolist()==['Index','target']; assert len(s)==len(t)==11013; assert s['Index'].equals(t['Index']); assert s['Index'].is_unique; assert np.isfinite(s['target'].to_numpy()).all(); print('CSV VALID')"
+python -c "import pandas as pd,numpy as np; f='submissions/18_stack3.csv'; s=pd.read_csv(f); t=pd.read_csv('data/sample_submission.csv'); assert list(s.columns)==['Index','target']; assert len(s)==len(t)==11013; assert s['Index'].equals(t['Index']); assert s['Index'].is_unique; assert np.isfinite(s['target'].to_numpy()).all(); print('CSV VALID:', f)"
 ```
 
-## Kaggle submission
+This checks the file's structure, alignment and numerical values. It does **not** confirm model quality, publishing success or competition eligibility.
 
-Competition: **[bobathon-esilv](https://www.kaggle.com/competitions/bobathon-esilv/)**.
+## Prepare a Kaggle submission
 
-Before submitting:
+The organizer's [Day 2 guide](docs/DAY2.md) allows iterative submissions (e.g. baseline followed by improved models). It requires every upload to correspond to code written and run through Bob, evaluated with skore, and associated with a **new report key** and a Skore Hub **EstimatorReport URL in the Submission Description**.
 
-1. **Confirm team identity:** the Kaggle team and the Skore Hub workspace must match according to the organizer's naming requirements. The Hub workspace used for these reports is `philippeEtchebest`; verify the actual Kaggle team name independently.
-2. **Confirm the authorized upload window** on Kaggle and any class instructions. Do not upload outside the competition's permitted period.
-3. Verify the final `Index,target` CSV has all **11,013** test visits in the sample's order.
-4. Open the [Experiment 09 EstimatorReport](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/63086) and check that it meets the organizer's report-to-submission correspondence requirement.
-5. Upload `submissions/09_tuned_lgbm.csv` using **Submit Predictions**.
-6. In the **Submission Description**, include the **full associated Skore Hub EstimatorReport URL**. For example:
+1. **Choose a validated model**, not necessarily the lowest unverified number in the journal.
+2. Verify the **Kaggle team and Skore workspace naming match**, that your account is in the team workspace, and that the model is eligible.
+3. Use Bob to fit the chosen model on all training visits and produce `submissions/<report-key>.csv` containing **11,013 rows** and the exact `Index,target` header.
+4. Obtain the **actual associated EstimatorReport URL** from the correct Skore Hub project. The report must correspond to that submission's experiment, not a different model.
+5. On [Kaggle](https://www.kaggle.com/competitions/bobathon-esilv/), upload the CSV through **Submit Predictions** during the organizer's authorized window and paste its full report URL into the **Submission Description**.
+6. Confirm Kaggle accepted the submission and follow any competition-specific instructions for choosing the final scored entry.
 
-   ```text
-   Experiment 09 — tuned LightGBM; 5-fold patient-grouped CV RMSE 4.1896.
-   Skore EstimatorReport: https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/63086
-   ```
+**Example — Experiment 09 only** (because its associated original-workspace URL is documented):
 
-7. Confirm the submission has been accepted and scored on Kaggle, and select the intended team submission if required by the competition.
+```text
+CSV: submissions/09_tuned_lgbm.csv
+Skore report key: 09_tuned_lgbm
+Submission Description:
+Experiment 09 — tuned LightGBM; grouped CV RMSE 4.1896.
+Skore EstimatorReport: https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/63086
+```
 
-A **Skore EstimatorReport URL is mandatory** even if Kaggle produces a leaderboard score. Do not confuse a local CV result with a Kaggle public or final private result.
+**Do not pair `18_stack3.csv` with the `09_tuned_lgbm` report.** The notebook/journal reports a score for Experiment 18, but its final CSV, successful publication and exact Hub URL cannot be established from GitHub alone.
 
-## Interpretation and limitations
+No public or private Kaggle score, official ranking or accepted final submission was verifiable from this repository at the time of this README update. Competition-specific submission limits and final-selection rules must be confirmed on Kaggle.
 
-- **Synthetic dataset:** results are specific to this competition and must not be interpreted as real-world clinical performance.
-- **Out-of-patient generalization:** `GroupKFold` mimics the Kaggle patient holdout; folds are not a substitute for an independent clinical validation study.
-- **Missingness:** ON/OFF/LEDD and timing records are incomplete; longitudinal features have limited reliability for sparse patient histories.
-- **Model selection:** choosing feature sets and hyperparameters using the same CV folds may bias the reported estimate slightly downward.
-- **Trend fitting:** patient ON/OFF trends use observed **feature measurements**, not true OFF labels; the separately documented target-fitted trend diagnostic is invalid for generalization.
-- **Medication modelling:** engineered features capture correlations and interactions, not proven causal drug effects.
-- **Remaining work:** a clean dependency lock, a final Kaggle acceptance check, and any video/archive hand-in required by DVL should be completed before final delivery.
+## Known limitations and next steps
 
-## Academic deliverables and references
+| Topic | Current status / action |
+| --- | --- |
+| Synthetic data | Generalization to real Parkinson's clinical cohorts has not been established. |
+| Patient holdout | GroupKFold is appropriate, but model selection on the same folds may introduce optimism. |
+| Nested stacking (17/18) | Review the cross-fitting chain end to end. In Experiment 18, features feeding inner stage-2 folds can be built using stage-1 models trained on other inner folds, creating a possible indirect validation-target dependency. Treat 3.6341 as **provisional** pending an independent leakage audit. |
+| Model interface | Some later classes inherit `BaseEstimator` before `RegressorMixin`; verify compatibility with the installed scikit-learn/Skore versions before assuming a complete execution will succeed. |
+| Experiment 13 | Duplicate report key; do not run unchanged. |
+| Experiment reports | Journal has unfilled report-link placeholders for 13–18 and inconsistent earlier workspace spellings. Verify report availability in the proper Hub workspace. |
+| Dependencies | Pin the actual working versions of NumPy, pandas, SciPy, scikit-learn and LightGBM for a reproducible archive. |
+| Predictions | CSVs are excluded from Git and must be regenerated or obtained from the teammate who produced them. |
+| Kaggle and course hand-in | Submission acceptance, final ranking, required video/archive and deadlines must be verified from Kaggle and DVL. |
 
-### Final hand-in checklist
+One diagnostic fitted a line directly to the **same patients' true `target` values** it evaluated and found approximately 1.61 RMSE. That is **in-sample target leakage**, not a generalization result; it must never be reported as a model performance floor. Details are in the [journal](journal/JOURNAL.md).
 
-- [x] EDA and dataset understanding documented.
-- [x] Multiple baselines and successive modelling improvements recorded.
-- [x] Best model implementation and five-fold patient-grouped validation saved.
-- [x] Experiment 09 Skore EstimatorReport URL documented.
-- [ ] Confirm Kaggle team and Skore workspace names correspond.
-- [ ] Validate and upload the best rule-compliant prediction CSV on Kaggle.
-- [ ] Confirm accepted submission and final leaderboard/result information.
-- [ ] Pin exact tested package versions for the final reproducible archive.
-- [ ] Record team membership/contributions and prepare the presentation video.
-- [ ] Confirm and complete any required code archive, video and DVL uploads by the official deadlines.
+## Team, credits and references
 
-The final deliverable deadlines and video instructions must be checked against the **actual DVL course assignment**; they cannot be verified from this repository alone.
+The repository history records work by **Cyril Ibrahim (`@cyrilibr`)** on the initial experiments and project setup, and a Day 2 commit by **Ismaël Wane** adding Experiments 10–18. Exact personal contributions, authorship and group membership should be verified with the team before final academic submission.
 
-### Source documents
+This repository builds on the organizers' original teaching materials, included under `docs/`:
 
-- [Original Probabl Bobathon starter repository](https://github.com/probabl-ai/bobathon-esilv)
-- [Organizer setup guide](docs/SETUP.md)
-- [Day 1: EDA and dummy baseline](docs/DAY1.md)
-- [Day 2: grouped validation, pipelines and submissions](docs/DAY2.md)
-- [Scientific challenge context](docs/CONTEXT.md)
-- [Exploratory analysis](data/eda.md)
-- [Experimental record](journal/JOURNAL.md)
-- [Kaggle competition and rules](https://www.kaggle.com/competitions/bobathon-esilv/rules)
+- [Official Bobathon starter repository](https://github.com/probabl-ai/bobathon-esilv)
+- [Competition page](https://www.kaggle.com/competitions/bobathon-esilv/)
+- [Competition-specific rules](https://www.kaggle.com/competitions/bobathon-esilv/rules)
+- [Organizer setup instructions](docs/SETUP.md)
+- [Day 1: EDA and baseline](docs/DAY1.md)
+- [Day 2: modelling and grouped CV](docs/DAY2.md)
+- [Scientific and data-generation context](docs/CONTEXT.md)
+- [EDA narrative](data/eda.md)
+- [Full experiment journal](journal/JOURNAL.md)
 
 ---
 
-*Built as an ESILV × IBM × Probabl Bobathon academic challenge project. Clinical background, evaluation guidelines and starter materials originate from the competition organizers; the experimental results in this README are those documented in this repository.*
+*Academic machine-learning project for the ESILV × IBM × Probabl Bobathon. This README documents repository evidence and openly distinguishes recorded results from results requiring independent verification.*
