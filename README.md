@@ -16,7 +16,7 @@
 
 > **Best result recorded in this repository: 3.6341 RMSE** — Experiment 18, three-stage stacking with patient-level smoothing, evaluated using five patient-grouped folds. This is a **teammate-reported local CV result**, not a verified Kaggle score; the nested stacking evaluation still merits an independent leakage audit.
 >
-> **Latest model with a report URL explicitly documented in the original team's Skore workspace:** Experiment 09, **4.1896 grouped CV RMSE**, [EstimatorReport 63086](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/63086).
+> **Latest model with a report URL explicitly documented under the earlier Skore workspace spelling:** Experiment 09, **4.1896 grouped CV RMSE**, [EstimatorReport 63086](https://skore.probabl.ai/philippeEtchebest/bobathon-esilv/estimators/63086).
 
 ## Project overview
 
@@ -82,9 +82,9 @@ For each held-out patient, input-only aggregates may use that patient's **availa
 
 Metric:
 
-\[
+$
 \operatorname{RMSE}=\sqrt{\frac{1}{n}\sum_{i=1}^{n}(y_i-\hat{y}_i)^2}
-\]
+$
 
 All model scores in this README are transcribed from the committed experiment journal or scripts. They are **not a claim of independently reproduced results**.
 
@@ -184,7 +184,7 @@ Experiment 19 (seed bagging) is described as *planned* in the journal, but **`ex
 | 5 | 4.2055 | 3.7937 | 3.6386 |
 | **Mean** | **4.1896** | **3.7652** | **3.6341** |
 
-The journal reports an **approximately 78% reduction in RMSE relative to the dummy baseline** from Experiment 01 to Experiment 18. The relative improvement is descriptive of the recorded validation scores, not proof of a similar improvement on Kaggle.
+Relative to the dummy baseline, the recorded Experiment 18 score represents an **approximately 78% reduction in RMSE**. This is an arithmetic comparison of documented validation results, not proof of a similar improvement on Kaggle.
 
 ## Skore reports and reproducibility status
 
